@@ -30,7 +30,7 @@ MANIFEST
 venv/
 env/
 ENV/
-ragvenv/  # 你的项目虚拟环境名称
+*ragvenv/  # 你的项目虚拟环境名称
 *.env
 .venv/
 
@@ -137,3 +137,9 @@ coverage.xml
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
+
+
+rag/models/
+experiments/results
+rag/data
+rag/storage

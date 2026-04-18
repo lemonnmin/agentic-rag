@@ -21,6 +21,13 @@ class RetrievalPlan:
 
 # 预定义检索策略
 RETRIEVAL_STRATEGIES = {
+    # 兼容旧版 planner 输出的 normal 模式，将其视为 simple
+    ("rag_search", "normal"): RetrievalPlan(
+        retrievers=["vector"],
+        top_k=3,
+        rerank=True,
+        multi_round=False
+    ),
     ("rag_search", "simple"): RetrievalPlan(
         retrievers=["vector"],
         top_k=3,

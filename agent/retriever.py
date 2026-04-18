@@ -132,7 +132,7 @@ def initialize_node(state: RAGState) -> dict:
     
     # 确定最大检索轮次
     multi_round = planner_core.get("multi_round", False)
-    max_rounds = 2 if multi_round else 1
+    max_rounds = planner_core.get("max_rounds", 2 if multi_round else 1)
     top_k = planner_core.get("top_k", 3)
     
     return {

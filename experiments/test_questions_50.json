@@ -1,0 +1,452 @@
+[
+  {
+    "id": "F-01",
+    "question": "香菇适宜生长温度是多少？",
+    "category": "基础事实型",
+    "reference_answer": "应给出香菇适宜生长温度范围，并说明不同阶段温度可能存在差异。",
+    "expected_keywords": ["香菇", "温度", "生长"],
+    "expected_tool": "",
+    "expected_behavior": "优先调用本地知识库，直接给出简洁专业回答。"
+  },
+  {
+    "id": "F-02",
+    "question": "平菇发菌阶段对湿度有什么要求？",
+    "category": "基础事实型",
+    "reference_answer": "应说明平菇发菌阶段的适宜湿度范围，并指出湿度过高或过低的影响。",
+    "expected_keywords": ["平菇", "发菌", "湿度"],
+    "expected_tool": "",
+    "expected_behavior": "直接基于知识库回答，不需要外部工具。"
+  },
+  {
+    "id": "F-03",
+    "question": "白玉菇出菇阶段需要控制哪些环境条件？",
+    "category": "基础事实型",
+    "reference_answer": "应涉及温度、湿度、光照和通风等要素。",
+    "expected_keywords": ["白玉菇", "出菇", "环境条件"],
+    "expected_tool": "",
+    "expected_behavior": "给出较完整的环境控制要点。"
+  },
+  {
+    "id": "F-04",
+    "question": "金针菇培养料常见配方有哪些？",
+    "category": "基础事实型",
+    "reference_answer": "应列出常见培养料组成，并体现主料与辅料搭配思路。",
+    "expected_keywords": ["金针菇", "培养料", "配方"],
+    "expected_tool": "",
+    "expected_behavior": "优先知识库回答，不调用外部工具。"
+  },
+  {
+    "id": "F-05",
+    "question": "食用菌栽培中灭菌的主要目的是什么？",
+    "category": "基础事实型",
+    "reference_answer": "应回答灭菌用于减少杂菌污染、保障菌种正常生长。",
+    "expected_keywords": ["灭菌", "污染", "杂菌"],
+    "expected_tool": "",
+    "expected_behavior": "回答应准确且简洁。"
+  },
+  {
+    "id": "F-06",
+    "question": "菌种接种时为什么要保持无菌操作？",
+    "category": "基础事实型",
+    "reference_answer": "应强调防止杂菌侵入和提升接种成功率。",
+    "expected_keywords": ["接种", "无菌操作", "杂菌"],
+    "expected_tool": "",
+    "expected_behavior": "应说明原因和后果。"
+  },
+  {
+    "id": "F-07",
+    "question": "平菇菌丝生长缓慢通常与哪些因素有关？",
+    "category": "基础事实型",
+    "reference_answer": "应涉及温度、湿度、培养料配方、菌种质量和污染等因素。",
+    "expected_keywords": ["菌丝", "生长缓慢", "因素"],
+    "expected_tool": "",
+    "expected_behavior": "应列举多个常见原因。"
+  },
+  {
+    "id": "F-08",
+    "question": "香菇菌棒制作中常见原料有哪些？",
+    "category": "基础事实型",
+    "reference_answer": "应说明常见主料和辅料组成，如木屑、麸皮等。",
+    "expected_keywords": ["香菇", "菌棒", "原料"],
+    "expected_tool": "",
+    "expected_behavior": "回答应覆盖主要原料。"
+  },
+  {
+    "id": "F-09",
+    "question": "食用菌栽培中通风管理为什么重要？",
+    "category": "基础事实型",
+    "reference_answer": "应说明通风与二氧化碳浓度、病害风险和菇体品质的关系。",
+    "expected_keywords": ["通风", "二氧化碳", "品质"],
+    "expected_tool": "",
+    "expected_behavior": "应给出因果关系。"
+  },
+  {
+    "id": "F-10",
+    "question": "出菇阶段光照管理有哪些基本要求？",
+    "category": "基础事实型",
+    "reference_answer": "应说明不同菇类对光照强度和时间的基本需求。",
+    "expected_keywords": ["出菇", "光照", "要求"],
+    "expected_tool": "",
+    "expected_behavior": "回答以领域知识为主。"
+  },
+  {
+    "id": "P-01",
+    "question": "白玉菇育种阶段有哪些关键步骤？",
+    "category": "流程步骤型",
+    "reference_answer": "应按阶段或步骤说明准备、灭菌、接种、培养、观察等流程。",
+    "expected_keywords": ["白玉菇", "育种阶段", "步骤"],
+    "expected_tool": "",
+    "expected_behavior": "应输出结构化分步骤答案。"
+  },
+  {
+    "id": "P-02",
+    "question": "从培养料配制到接种，香菇栽培前期一般怎么做？",
+    "category": "流程步骤型",
+    "reference_answer": "应按培养料、装袋、灭菌、冷却、接种等顺序回答。",
+    "expected_keywords": ["培养料", "装袋", "灭菌", "接种"],
+    "expected_tool": "",
+    "expected_behavior": "强调流程顺序。"
+  },
+  {
+    "id": "P-03",
+    "question": "平菇发菌管理通常分哪些环节？",
+    "category": "流程步骤型",
+    "reference_answer": "应分阶段说明温度控制、湿度控制、观察污染和通风管理。",
+    "expected_keywords": ["平菇", "发菌管理", "环节"],
+    "expected_tool": "",
+    "expected_behavior": "给出阶段化管理建议。"
+  },
+  {
+    "id": "P-04",
+    "question": "金针菇从菌种准备到出菇管理的大致流程是什么？",
+    "category": "流程步骤型",
+    "reference_answer": "应给出完整流程概述，并体现关键控制点。",
+    "expected_keywords": ["金针菇", "流程", "出菇管理"],
+    "expected_tool": "",
+    "expected_behavior": "结构清晰，覆盖全过程。"
+  },
+  {
+    "id": "P-05",
+    "question": "食用菌菌房建设一般需要考虑哪些步骤？",
+    "category": "流程步骤型",
+    "reference_answer": "应涉及选址、保温、防潮、通风、设备布置等。",
+    "expected_keywords": ["菌房建设", "选址", "通风", "保温"],
+    "expected_tool": "",
+    "expected_behavior": "给出条目化回答。"
+  },
+  {
+    "id": "P-06",
+    "question": "香菇菌棒入棚后的日常管理流程怎么安排？",
+    "category": "流程步骤型",
+    "reference_answer": "应说明温湿度观察、通风、光照、翻堆或巡检等内容。",
+    "expected_keywords": ["香菇", "菌棒", "日常管理"],
+    "expected_tool": "",
+    "expected_behavior": "按日常管理顺序回答。"
+  },
+  {
+    "id": "P-07",
+    "question": "白玉菇栽培中从接种到采收的主要阶段有哪些？",
+    "category": "流程步骤型",
+    "reference_answer": "应给出接种、发菌、催蕾、出菇、采收等阶段。",
+    "expected_keywords": ["白玉菇", "接种", "采收"],
+    "expected_tool": "",
+    "expected_behavior": "适合做阶段性说明。"
+  },
+  {
+    "id": "P-08",
+    "question": "平菇出菇期的管理步骤应该怎么安排？",
+    "category": "流程步骤型",
+    "reference_answer": "应包含控温、保湿、通风、光照和采收管理。",
+    "expected_keywords": ["平菇", "出菇期", "管理步骤"],
+    "expected_tool": "",
+    "expected_behavior": "答案应分点且完整。"
+  },
+  {
+    "id": "P-09",
+    "question": "食用菌污染后一般怎么排查和处理？",
+    "category": "流程步骤型",
+    "reference_answer": "应说明发现、隔离、原因分析、环境处理和后续预防。",
+    "expected_keywords": ["污染", "排查", "处理"],
+    "expected_tool": "",
+    "expected_behavior": "给出处理流程。"
+  },
+  {
+    "id": "P-10",
+    "question": "新手种植白玉菇，从准备到管理应按什么顺序进行？",
+    "category": "流程步骤型",
+    "reference_answer": "应使用通俗方式给出完整步骤建议。",
+    "expected_keywords": ["新手", "白玉菇", "顺序"],
+    "expected_tool": "",
+    "expected_behavior": "结构化回答，偏指导性。"
+  },
+  {
+    "id": "R-01",
+    "question": "若菌房温度偏低且湿度偏高，应如何调整？",
+    "category": "多条件推理型",
+    "reference_answer": "应同时考虑升温、降湿、通风和防污染。",
+    "expected_keywords": ["温度偏低", "湿度偏高", "通风", "调整"],
+    "expected_tool": "",
+    "expected_behavior": "应体现多条件综合分析。"
+  },
+  {
+    "id": "R-02",
+    "question": "北方春季平菇种植中若昼夜温差较大，应如何管理菌房？",
+    "category": "多条件推理型",
+    "reference_answer": "应结合昼夜温差、保温和通风管理提出建议。",
+    "expected_keywords": ["北方春季", "昼夜温差", "菌房管理"],
+    "expected_tool": "",
+    "expected_behavior": "应体现环境条件推理。"
+  },
+  {
+    "id": "R-03",
+    "question": "香菇菌丝生长缓慢且培养料表面有轻微杂菌时，可能是什么原因，怎么处理？",
+    "category": "多条件推理型",
+    "reference_answer": "应同时分析菌丝缓慢和杂菌问题，并给出综合处理建议。",
+    "expected_keywords": ["菌丝生长缓慢", "杂菌", "处理"],
+    "expected_tool": "",
+    "expected_behavior": "应分析原因并给出处理方案。"
+  },
+  {
+    "id": "R-04",
+    "question": "若白玉菇催蕾期温度合适但湿度不足，会出现什么问题，应如何调整？",
+    "category": "多条件推理型",
+    "reference_answer": "应说明湿度不足对催蕾或出菇的影响，并提出补救措施。",
+    "expected_keywords": ["白玉菇", "催蕾期", "湿度不足"],
+    "expected_tool": "",
+    "expected_behavior": "体现条件-结果-调整逻辑。"
+  },
+  {
+    "id": "R-05",
+    "question": "培养料配方合理但灭菌不彻底时，对后续栽培会有什么影响？",
+    "category": "多条件推理型",
+    "reference_answer": "应讨论污染风险和后续生长问题。",
+    "expected_keywords": ["灭菌不彻底", "污染风险", "影响"],
+    "expected_tool": "",
+    "expected_behavior": "强调因果推理。"
+  },
+  {
+    "id": "R-06",
+    "question": "若香菇栽培中温度偏高、通风不足且菌盖品质下降，应该如何综合处理？",
+    "category": "多条件推理型",
+    "reference_answer": "应综合考虑降温、通风和品质恢复策略。",
+    "expected_keywords": ["温度偏高", "通风不足", "品质下降"],
+    "expected_tool": "",
+    "expected_behavior": "应给出综合管理建议。"
+  },
+  {
+    "id": "R-07",
+    "question": "平菇出菇期若空气湿度很高但菇体仍偏干，可能是什么原因？",
+    "category": "多条件推理型",
+    "reference_answer": "应讨论局部环境、通风、喷水方式等因素。",
+    "expected_keywords": ["平菇", "湿度高", "菇体偏干"],
+    "expected_tool": "",
+    "expected_behavior": "适合验证推理有效性。"
+  },
+  {
+    "id": "R-08",
+    "question": "白玉菇栽培中若菌丝长势好但迟迟不出菇，应优先检查哪些方面？",
+    "category": "多条件推理型",
+    "reference_answer": "应涉及温度、湿度、光照、通风和刺激条件。",
+    "expected_keywords": ["菌丝长势好", "不出菇", "检查"],
+    "expected_tool": "",
+    "expected_behavior": "应给出排查优先级。"
+  },
+  {
+    "id": "R-09",
+    "question": "如果培养料含水量过高，又遇到低温环境，食用菌栽培可能出现哪些问题？",
+    "category": "多条件推理型",
+    "reference_answer": "应说明菌丝生长受阻、污染风险升高等。",
+    "expected_keywords": ["含水量过高", "低温", "问题"],
+    "expected_tool": "",
+    "expected_behavior": "多因素联合分析。"
+  },
+  {
+    "id": "R-10",
+    "question": "如何通过调节温湿度和通风来降低食用菌污染风险？",
+    "category": "多条件推理型",
+    "reference_answer": "应说明多个环境变量与污染风险之间的关系。",
+    "expected_keywords": ["温湿度", "通风", "污染风险"],
+    "expected_tool": "",
+    "expected_behavior": "应具备较强综合推理性。"
+  },
+  {
+    "id": "T-01",
+    "question": "近期山东临沂天气是否适合白玉菇管理？",
+    "category": "实时信息型",
+    "reference_answer": "应结合近期天气与白玉菇管理要求做判断。",
+    "expected_keywords": ["山东临沂", "天气", "白玉菇", "管理"],
+    "expected_tool": "weather",
+    "expected_behavior": "应调用天气工具并融合领域知识。"
+  },
+  {
+    "id": "T-02",
+    "question": "北京这几天天气适不适合平菇栽培？",
+    "category": "实时信息型",
+    "reference_answer": "应给出天气判断和栽培建议。",
+    "expected_keywords": ["北京", "天气", "平菇", "栽培"],
+    "expected_tool": "weather",
+    "expected_behavior": "优先调用天气工具。"
+  },
+  {
+    "id": "T-03",
+    "question": "最近有没有新的食用菌扶持政策？",
+    "category": "实时信息型",
+    "reference_answer": "应尝试搜索近期政策信息，并说明信息来源。",
+    "expected_keywords": ["最近", "食用菌", "扶持政策"],
+    "expected_tool": "web_search",
+    "expected_behavior": "应调用网络搜索工具。"
+  },
+  {
+    "id": "T-04",
+    "question": "今年食用菌市场价格趋势如何？",
+    "category": "实时信息型",
+    "reference_answer": "应搜索最新市场信息并进行概括。",
+    "expected_keywords": ["今年", "食用菌", "市场价格", "趋势"],
+    "expected_tool": "web_search",
+    "expected_behavior": "应调用网络搜索工具。"
+  },
+  {
+    "id": "T-05",
+    "question": "本周当地持续降雨，会不会影响香菇出菇管理？",
+    "category": "实时信息型",
+    "reference_answer": "应结合天气条件和香菇管理知识回答。",
+    "expected_keywords": ["持续降雨", "香菇", "出菇管理"],
+    "expected_tool": "weather",
+    "expected_behavior": "应尽量调用天气工具。"
+  },
+  {
+    "id": "T-06",
+    "question": "最近白玉菇相关市场资讯有哪些值得关注？",
+    "category": "实时信息型",
+    "reference_answer": "应通过搜索获取近期资讯并总结。",
+    "expected_keywords": ["最近", "白玉菇", "市场资讯"],
+    "expected_tool": "web_search",
+    "expected_behavior": "应调用网络搜索。"
+  },
+  {
+    "id": "T-07",
+    "question": "当前上海天气适不适合金针菇菌房降温管理？",
+    "category": "实时信息型",
+    "reference_answer": "应调用天气信息并结合金针菇管理知识。",
+    "expected_keywords": ["上海", "天气", "金针菇", "降温管理"],
+    "expected_tool": "weather",
+    "expected_behavior": "应触发天气工具。"
+  },
+  {
+    "id": "T-08",
+    "question": "最近网上有没有关于食用菌新技术的报道？",
+    "category": "实时信息型",
+    "reference_answer": "应尝试搜索近期技术资讯。",
+    "expected_keywords": ["最近", "食用菌", "新技术", "报道"],
+    "expected_tool": "web_search",
+    "expected_behavior": "应调用网络搜索。"
+  },
+  {
+    "id": "T-09",
+    "question": "近期高温天气下平菇管理需要特别注意什么？",
+    "category": "实时信息型",
+    "reference_answer": "应结合近期天气和高温管理措施回答。",
+    "expected_keywords": ["近期", "高温天气", "平菇", "管理"],
+    "expected_tool": "weather",
+    "expected_behavior": "应优先考虑天气工具。"
+  },
+  {
+    "id": "T-10",
+    "question": "最近食用菌行业有没有重要政策或新闻变化？",
+    "category": "实时信息型",
+    "reference_answer": "应总结近期行业新闻或政策动态。",
+    "expected_keywords": ["最近", "食用菌行业", "政策", "新闻"],
+    "expected_tool": "web_search",
+    "expected_behavior": "应调用网络搜索。"
+  },
+  {
+    "id": "O-01",
+    "question": "推荐一部适合新手看的电影。",
+    "category": "越界无关型",
+    "reference_answer": "不属于食用菌领域，应提示超出领域范围或进行保守回答。",
+    "expected_keywords": ["非领域", "无法提供专业建议"],
+    "expected_tool": "",
+    "expected_behavior": "系统应识别越界问题，降低领域回答强度。"
+  },
+  {
+    "id": "O-02",
+    "question": "帮我写一首关于春天的诗。",
+    "category": "越界无关型",
+    "reference_answer": "不属于食用菌领域问答，系统应说明范围限制。",
+    "expected_keywords": ["超出范围", "食用菌领域"],
+    "expected_tool": "",
+    "expected_behavior": "不应误用知识库。"
+  },
+  {
+    "id": "O-03",
+    "question": "如何学习 Python 编程？",
+    "category": "越界无关型",
+    "reference_answer": "属于通用问题，不应输出伪农业知识。",
+    "expected_keywords": ["非食用菌领域", "范围说明"],
+    "expected_tool": "",
+    "expected_behavior": "系统应体现边界控制。"
+  },
+  {
+    "id": "O-04",
+    "question": "今天NBA比赛谁会赢？",
+    "category": "越界无关型",
+    "reference_answer": "与系统领域不相关，应避免错误领域回答。",
+    "expected_keywords": ["非领域问题", "无法回答"],
+    "expected_tool": "",
+    "expected_behavior": "可做范围提示。"
+  },
+  {
+    "id": "O-05",
+    "question": "帮我推荐一款手机。",
+    "category": "越界无关型",
+    "reference_answer": "与食用菌知识服务无关，应做越界处理。",
+    "expected_keywords": ["超出系统范围"],
+    "expected_tool": "",
+    "expected_behavior": "不应调用农业知识库。"
+  },
+  {
+    "id": "O-06",
+    "question": "高等数学怎么复习？",
+    "category": "越界无关型",
+    "reference_answer": "应说明不属于当前系统专业范围。",
+    "expected_keywords": ["当前系统主要面向食用菌种植"],
+    "expected_tool": "",
+    "expected_behavior": "体现系统定位。"
+  },
+  {
+    "id": "O-07",
+    "question": "请预测明天股市行情。",
+    "category": "越界无关型",
+    "reference_answer": "不属于农业领域，应进行保守处理。",
+    "expected_keywords": ["不属于食用菌领域"],
+    "expected_tool": "",
+    "expected_behavior": "避免无依据回答。"
+  },
+  {
+    "id": "O-08",
+    "question": "帮我写一份简历。",
+    "category": "越界无关型",
+    "reference_answer": "应提示超出系统主要用途。",
+    "expected_keywords": ["超出系统用途"],
+    "expected_tool": "",
+    "expected_behavior": "不应生成看似专业的伪回答。"
+  },
+  {
+    "id": "O-09",
+    "question": "讲一下量子力学的基本原理。",
+    "category": "越界无关型",
+    "reference_answer": "不属于系统领域，应做边界提示。",
+    "expected_keywords": ["非食用菌种植领域"],
+    "expected_tool": "",
+    "expected_behavior": "降低领域回答强度。"
+  },
+  {
+    "id": "O-10",
+    "question": "今天天气怎么样，顺便推荐一家火锅店。",
+    "category": "越界无关型",
+    "reference_answer": "混合问题中餐饮推荐部分明显越界，系统应避免越界扩展。",
+    "expected_keywords": ["领域边界", "无法提供火锅店推荐"],
+    "expected_tool": "weather",
+    "expected_behavior": "最多可处理天气相关部分，不应扩展到餐饮推荐。"
+  }
+]

@@ -111,22 +111,48 @@ def fuse_multi_source_results(results_list: List[Dict]) -> List[Dict]:
     return fused
 
 
-def optimize_answer(raw_answer: str, query: str, context: List[str]) -> str:
+def get_plan_config(retrieval_plan: Dict) -> Dict:
+    if isinstance(retrieval_plan, dict):
+        return retrieval_plan.get("data", retrieval_plan)
+    return {}
+
+
+def optimize_answer(
+    raw_answer: str,
+    query: str,
+    context: List[str],
+    detailed: bool = False,
+    structured: bool = False,
+    prefer_high_quality_context: bool = False
+) -> str:
     """
     优化答案（与原始类中的方法一致）
     """
-    context_text = "\n".join(context)
+    context_to_use = context[:5] if prefer_high_quality_context else context
+    context_text = "\n".join(context_to_use)
+    extra_requirements = []
+    if detailed:
+        extra_requirements.append("尽量补充关键条件、注意事项和常见误区")
+    if structured:
+        extra_requirements.append("优先使用分点或分步骤表达，便于直接执行")
+
     prompt = """
 优化以下食用菌种植问题的回答，要求：
 1. 语言简洁专业，符合种植户阅读习惯
 2. 补充必要的种植建议（基于上下文）
 3. 避免重复和冗余
+4. {extra_requirements}
 
 原始回答：{raw_answer}
 问题：{query}
 上下文：{context}
 优化后的回答：
-""".format(raw_answer=raw_answer, query=query, context=context_text)
+""".format(
+        raw_answer=raw_answer,
+        query=query,
+        context=context_text,
+        extra_requirements="；".join(extra_requirements) if extra_requirements else "若上下文不足，请只保留有依据的内容"
+    )
 
     llm = get_llm()
     optimized_response = llm.chat(
@@ -204,6 +230,9 @@ def judge_tool_node(state: ReasoningState) -> dict:
     query = state["query"]
     rag_result = state["rag_result"]
 
+    retrieval_plan = state.get("retrieval_plan", {})
+    plan_config = get_plan_config(retrieval_plan)
+
     if not rag_result:
         return {
             "tool_decision": [],
@@ -214,6 +243,20 @@ def judge_tool_node(state: ReasoningState) -> dict:
     # 获取最终答案，用于摘要
     final_answer = rag_result.get("final_answer", "")
     
+    if plan_config.get("force_tool_call"):
+        suggested_tools = [
+            tool_name for tool_name in plan_config.get("suggested_tools", [])
+            if tool_name in TOOL_DEFINITIONS
+        ]
+        if not suggested_tools:
+            suggested_tools = ["web_search"]
+        if suggested_tools:
+            return {
+                "tool_decision": suggested_tools,
+                "step": "judge_completed",
+                "messages": [AIMessage(content=f"根据优化策略强制调用工具：{suggested_tools}")]
+            }
+
     tool_prompt = f"""
 你需要分析以下查询和现有RAG检索结果，判断是否需要调用外部工具，规则如下：
 1. 仅当RAG结果无法满足查询需求（如缺乏实时/最新数据、特定地区数据）时调用工具
@@ -334,6 +377,8 @@ def optimize_answer_node(state: ReasoningState) -> dict:
     rag_result = state["rag_result"]
     query = state["query"]
     fused_results = state.get("fused_results", [])
+    retrieval_plan = state.get("retrieval_plan", {})
+    plan_config = get_plan_config(retrieval_plan)
 
     if not rag_result:
         optimized = "无法生成答案"
@@ -342,7 +387,10 @@ def optimize_answer_node(state: ReasoningState) -> dict:
         optimized = optimize_answer(
             raw_answer=rag_result.get("final_answer", ""),
             query=query,
-            context=context
+            context=context,
+            detailed=plan_config.get("detailed_optimization", False),
+            structured=plan_config.get("structured_answer", False),
+            prefer_high_quality_context=plan_config.get("prefer_high_quality_context", False)
         )
 
     return {

@@ -9,6 +9,7 @@
 """
 import sys
 import os
+import logging
 from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from typing import List
@@ -31,6 +32,7 @@ def load_env_from_root():
 
 class RagSearchTool(BaseTool):
     name = "rag_search"
+    _shared_vector_db = None
     description = "用于查询食用菌种植知识库，支持simple/complex/multi_turn三种检索模式"
 
     def __init__(self, mode: str = "simple"):
@@ -42,10 +44,24 @@ class RagSearchTool(BaseTool):
         load_env_from_root()
         self.strategy: RetrievalPlan = get_retrieval_strategy("rag_search", mode)
         self.embedding = OpenAIEmbedding()
-        self.vector_db = VectorStore()
+        self.vector_db = self._shared_vector_db or VectorStore()
         self.llm = OpenAIChat()
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         # 多轮检索的历史上下文
         self.history_queries = []
+
+    @classmethod
+    def set_shared_vector_db(cls, vector_db: VectorStore):
+        cls._shared_vector_db = vector_db
+
+    @property
+    def vector_store(self):
+        return self.vector_db
+
+    @vector_store.setter
+    def vector_store(self, value):
+        self.vector_db = value
+        self.__class__._shared_vector_db = value
 
     def retrieve(self, query: str) -> List[str]:
         """

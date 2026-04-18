@@ -18,6 +18,7 @@ from pathlib import Path
 from agent.controller import OptimizedRAGController
 from rag.Embeddings import OpenAIEmbedding
 from rag.VectorBase import VectorStore
+from rag.storage_db import get_storage_db
 from tools.rag_search import RagSearchTool  # 用于重新加载向量库后更新工具
 from rag.utils import ReadFiles
 # ---------- 页面配置 ----------
@@ -77,9 +78,10 @@ with st.sidebar:
                             st.session_state.vector_store = vs # 绑定会话的实例
                             st.session_state.collection_name = selected
                             # 更新RagSearchTool中的向量库
+                            RagSearchTool.set_shared_vector_db(vs)
                             if st.session_state.rag_tool is None:
                                 st.session_state.rag_tool = RagSearchTool()
-                            st.session_state.rag_tool.vector_store = vs
+                            st.session_state.rag_tool.vector_db = vs
                             st.success(f"成功加载向量库：{selected}")
                         except Exception as e:
                             st.error(f"加载失败：{e}")
@@ -105,19 +107,45 @@ with st.sidebar:
                         f.write(file.getbuffer())
                 st.success(f"✅ 上传{len(uploaded_files)}个文件到data目录！")
                 # 加载并构建向量库
-                docs = ReadFiles('./rag/data').get_content(max_token_len=600, cover_content=150)
+                docs = ReadFiles('./rag/data').get_content(
+                    max_token_len=chunk_size,
+                    cover_content=chunk_overlap
+                )
                 
                 # 初始化向量库
-                vs = VectorStore(docs)
+                vs = VectorStore(docs, collection_name=collection_name)
                 embedding_model = OpenAIEmbedding(is_api=True)  # 默认使用API，您可调整为本地
                 vectors = vs.get_vector(embedding_model)
                 if vectors:
                     vs.persist(path='./rag/storage')  # 保存到storage目录
+                    try:
+                        get_storage_db().replace_collection_documents(
+                            collection_name=collection_name,
+                            documents=[
+                                {
+                                    "file_name": file.name,
+                                    "file_path": os.path.join("./rag/data", file.name),
+                                    "file_type": Path(file.name).suffix.lower().lstrip("."),
+                                    "file_size": len(file.getbuffer()),
+                                    "source": "upload",
+                                }
+                                for file in uploaded_files
+                            ],
+                            chunks=docs,
+                            storage_path=os.path.abspath("./rag/storage"),
+                            index_file=os.path.abspath(os.path.join("./rag/storage", f"{collection_name}.index")),
+                            doc_file=os.path.abspath(os.path.join("./rag/storage", f"{collection_name}_docs.pkl")),
+                            embedding_model=embedding_model.__class__.__name__,
+                            vector_dimension=len(vectors[0]) if vectors else 0,
+                        )
+                    except Exception as db_error:
+                        st.warning(f"SQLite元数据写入失败：{db_error}")
                     st.session_state.vector_store = vs
                     st.session_state.collection_name = collection_name
+                    RagSearchTool.set_shared_vector_db(vs)
                     if st.session_state.rag_tool is None:
                         st.session_state.rag_tool = RagSearchTool()
-                    st.session_state.rag_tool.vector_store = vs
+                    st.session_state.rag_tool.vector_db = vs
                     st.success(f"向量库构建成功！共 {len(docs)} 个文本块")
                 else:
                     st.error("向量生成失败")
@@ -164,7 +192,11 @@ else:
         # 执行流程（带进度提示）
         with st.spinner("正在执行全流程，请稍候..."):
             try:
-                result = controller.run(query, max_retries=max_retries)
+                result = controller.run(
+                    query,
+                    max_retries=max_retries,
+                    collection_name=st.session_state.collection_name
+                )
             except Exception as e:
                 st.error(f"执行过程中发生错误：{str(e)}")
                 st.stop()

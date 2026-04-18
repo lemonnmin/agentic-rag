@@ -41,7 +41,7 @@ class RetrievalPlan(BaseModel):
     rerank: bool = Field(default=True, description="是否重排序")
     multi_round: bool = Field(default=False, description="是否多轮检索")
     expand_keywords: List[str] = Field(default=[], description="扩展关键词")
-    mode: str = Field(default="normal", description="检索模式")
+    mode: str = Field(default="simple", description="检索模式")
     sub_tasks: List[str] = Field(default=[], description="检索子任务")
 
 # 初始化LLM（用于智能策略生成）
@@ -66,7 +66,7 @@ class RetrievalPlannerGraphAgent:
     def __init__(self):
         # 策略映射表
         self.strategy_map = {
-            # 简单RAG问题：向量检索+小top_k + normal模式
+            # 简单RAG问题：向量检索+小top_k + simple模式
             ("rag_search", "simple"): RetrievalPlan(
                 retrievers=["vector"],
                 top_k=3,
@@ -146,7 +146,7 @@ def rule_based_planning_node(state: PlannerState) -> dict:
         plan = RetrievalPlan(
             retrievers=["vector"],
             top_k=3,
-            mode="normal"
+            mode="simple"
         )
     
     # 转换为字典
@@ -231,7 +231,7 @@ def llm_based_planning_node(state: PlannerState) -> dict:
                     elif field in ["expand_keywords", "sub_tasks"]:
                         llm_plan[field] = []
                     else:
-                        llm_plan[field] = "normal"
+                        llm_plan[field] = "simple"
             
             return {
                 "llm_based_plan": llm_plan,
@@ -421,7 +421,7 @@ def plan_retrieval(intent_data: Dict) -> Dict:
             default_plan = RetrievalPlan(
                 retrievers=["vector"],
                 top_k=3,
-                mode="normal",
+                mode="simple",
                 sub_tasks=intent_core.get("sub_tasks", [])
             )
             final_plan = default_plan.dict()
@@ -442,7 +442,7 @@ def plan_retrieval(intent_data: Dict) -> Dict:
         fallback_plan = RetrievalPlan(
             retrievers=["vector"],
             top_k=3,
-            mode="normal",
+            mode="simple",
             sub_tasks=intent_core.get("sub_tasks", [])
         )
         

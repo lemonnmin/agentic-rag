@@ -28,6 +28,7 @@ from agent.planner import plan_retrieval
 from agent.reasoning import ReasoningGraphAgent
 from agent.evaluation import EvaluationGraphAgent
 from rag.LLM import OpenAIChat
+from rag.storage_db import get_storage_db
 
 
 def load_env_from_root():
@@ -56,12 +57,115 @@ class ControllerState(TypedDict):
     optimization_suggestions: List[str]      # 优化建议列表
     optimization_applied: bool                # 是否已应用优化
     retry_count: int                          # 重试次数
+    max_retries: int                          # 最大重试次数
     error: Optional[str]                      # 错误信息
     step: str                                 # 当前步骤
     thread_id: Optional[str]                  # 线程ID
+    baseline_evaluation: Optional[Dict]       # 首次评估结果
+    optimization_analysis: Optional[Dict]     # 结构化优化分析
+    optimization_actions_applied: List[str]   # 已应用的优化动作
 
 
 # ========== 优化规则引擎 ==========
+NUMERIC_SCORE_KEYS = [
+    "retrieval_relevance",
+    "answer_accuracy",
+    "answer_completeness",
+    "reasoning_effectiveness",
+    "tool_call_appropriateness",
+    "result_fusion_quality",
+    "answer_optimization_effect",
+]
+
+DOMAIN_KEYWORDS = [
+    "食用菌", "香菇", "平菇", "金针菇", "白玉菇", "杏鲍菇", "菌丝", "菌种",
+    "出菇", "发菌", "菌房", "培养料", "培养基", "灭菌", "接种", "栽培", "种植",
+    "温度", "湿度", "通风", "污染", "菇", "菌",
+]
+
+
+def _is_out_of_scope_query(query: str, intent_data: Dict[str, Any]) -> bool:
+    text = query or ""
+    if any(keyword in text for keyword in DOMAIN_KEYWORDS):
+        return False
+
+    intent_type = intent_data.get("intent_type", "unknown")
+    keywords = intent_data.get("keywords") or []
+    domain = intent_data.get("domain", "")
+    return (intent_type == "unknown" or not keywords) and domain in {"其他食用菌", "通用", "", None}
+
+
+def _build_out_of_scope_result(reason: str) -> Dict[str, Any]:
+    answer = (
+        "该问题超出本系统当前的服务范围。"
+        "本系统主要面向食用菌种植知识问答，可回答菌种选择、培养料配制、环境控制、出菇管理和病害防治等相关问题。"
+        "请改为咨询食用菌种植相关内容。"
+    )
+    return {
+        "reasoning_result": {
+            "success": True,
+            "fused_results": [],
+            "raw_answer": answer,
+            "optimized_answer": answer,
+            "retrieve_rounds": 0,
+            "called_tools": [],
+            "tool_results": [],
+            "error": None,
+        },
+        "evaluation_result": {
+            "success": True,
+            "data": {
+                "retrieval_relevance": 0,
+                "answer_accuracy": 4,
+                "answer_completeness": 4,
+                "reasoning_effectiveness": 3,
+                "tool_call_appropriateness": 5,
+                "result_fusion_quality": 3,
+                "answer_optimization_effect": 3,
+                "suggestion": "该问题超出系统服务范围，已触发边界拒答策略。",
+            },
+            "error": None,
+        },
+        "optimization_suggestions": [],
+        "out_of_scope": True,
+        "boundary_reason": reason,
+    }
+
+
+def _build_degraded_reasoning_result(error_msg: str) -> Dict[str, Any]:
+    answer = (
+        "系统在当前问题的深度推理阶段出现超时或异常，已返回降级结果。"
+        "建议稍后重试，或将问题改写为更简洁、聚焦的食用菌种植问题。"
+    )
+    return {
+        "success": False,
+        "fused_results": [],
+        "raw_answer": answer,
+        "optimized_answer": answer,
+        "retrieve_rounds": 0,
+        "called_tools": [],
+        "tool_results": [],
+        "error": error_msg,
+    }
+
+
+def _build_degraded_evaluation_result(error_msg: str) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "data": {
+            "retrieval_relevance": 2,
+            "answer_accuracy": 2,
+            "answer_completeness": 2,
+            "reasoning_effectiveness": 2,
+            "tool_call_appropriateness": 2,
+            "result_fusion_quality": 2,
+            "answer_optimization_effect": 2,
+            "suggestion": f"评估阶段降级：{error_msg}",
+        },
+        "error": error_msg,
+    }
+
+
 class OptimizationEngine:
     """根据评估结果自动生成优化策略"""
     
@@ -90,12 +194,16 @@ class OptimizationEngine:
         
         # 提取具体优化建议
         optimization_actions = self._extract_actions(suggestion)
+        priority_issue = min(scores, key=scores.get) if scores else None
+        recommended_actions = self._build_recommended_actions(low_score_dimensions)
         
         return {
             "scores": scores,
             "low_score_dimensions": low_score_dimensions,
+            "priority_issue": priority_issue,
             "original_suggestion": suggestion,
-            "optimization_actions": optimization_actions
+            "optimization_actions": optimization_actions,
+            "recommended_actions": recommended_actions
         }
     
     def _extract_actions(self, suggestion: str) -> List[Dict]:
@@ -127,12 +235,36 @@ class OptimizationEngine:
                 })
         
         return actions
+
+    def _build_recommended_actions(self, low_score_dimensions: List[str]) -> List[str]:
+        actions: List[str] = []
+
+        if "retrieval_relevance" in low_score_dimensions:
+            actions.extend(["increase_top_k", "enable_rerank", "enable_multi_round", "expand_keywords"])
+
+        if "answer_completeness" in low_score_dimensions:
+            actions.extend(["enable_multi_round", "expand_keywords", "structured_answer"])
+
+        if "reasoning_effectiveness" in low_score_dimensions:
+            actions.extend(["enable_multi_round", "increase_max_rounds", "focus_subtasks"])
+
+        if "tool_call_appropriateness" in low_score_dimensions:
+            actions.extend(["force_tool_call", "prefer_suggested_tools"])
+
+        if "result_fusion_quality" in low_score_dimensions:
+            actions.extend(["enable_rerank", "prefer_high_quality_context"])
+
+        if "answer_optimization_effect" in low_score_dimensions:
+            actions.extend(["detailed_optimization", "structured_answer", "prefer_high_quality_context"])
+
+        return list(dict.fromkeys(actions))
     
     def generate_improved_plan(self, original_plan: Dict, evaluation_analysis: Dict) -> Dict:
         """根据评估分析生成改进的检索计划"""
         
         low_score_dims = evaluation_analysis.get("low_score_dimensions", [])
         actions = evaluation_analysis.get("optimization_actions", [])
+        recommended_actions = evaluation_analysis.get("recommended_actions", [])
         
         # 复制原始计划
         improved_plan = original_plan.copy() if original_plan else {"data": {}}
@@ -142,35 +274,48 @@ class OptimizationEngine:
             improved_plan["data"] = {}
         
         plan_data = improved_plan["data"]
+        plan_data["optimization_actions"] = recommended_actions
         
         # 根据低分维度自动调整参数
         if "retrieval_relevance" in low_score_dims:
             # 检索相关性低：增加top_k，启用多轮检索
             plan_data["top_k"] = min(plan_data.get("top_k", 5) + 2, 10)
             plan_data["multi_round"] = True
+            plan_data["rerank"] = True
             print(f"📊 优化：检索相关性低，top_k调整为{plan_data['top_k']}，启用多轮检索")
         
         if "answer_completeness" in low_score_dims:
             # 答案完整性低：增加检索轮次，扩展关键词
             plan_data["multi_round"] = True
+            plan_data["structured_answer"] = True
             if "expand_keywords" not in plan_data:
                 plan_data["expand_keywords"] = []
             plan_data["expand_keywords"].extend(["详细", "完整", "全部"])
             print(f"📊 优化：答案完整性低，启用多轮检索，添加扩展关键词")
+
+        if "reasoning_effectiveness" in low_score_dims:
+            plan_data["multi_round"] = True
+            plan_data["max_rounds"] = max(plan_data.get("max_rounds", 2), 3)
+            plan_data["focus_subtasks"] = True
+            print("📊 优化：推理有效性低，增加检索轮次并聚焦子任务")
         
         if "tool_call_appropriateness" in low_score_dims:
             # 工具调用问题：强制在下次尝试中调用工具
             plan_data["force_tool_call"] = True
+            plan_data["prefer_suggested_tools"] = True
             print(f"📊 优化：工具调用问题，下次将强制评估工具需求")
         
         if "result_fusion_quality" in low_score_dims:
             # 结果融合质量低：增加rerank
             plan_data["rerank"] = True
+            plan_data["prefer_high_quality_context"] = True
             print(f"📊 优化：结果融合质量低，启用重排序")
         
         if "answer_optimization_effect" in low_score_dims:
             # 答案优化效果低：在优化阶段提供更详细的上下文
             plan_data["detailed_optimization"] = True
+            plan_data["structured_answer"] = True
+            plan_data["prefer_high_quality_context"] = True
             print(f"📊 优化：答案优化效果低，将提供更详细的上下文")
         
         # 根据具体建议调整
@@ -186,11 +331,15 @@ class OptimizationEngine:
                 plan_data["multi_round"] = True
                 plan_data["max_rounds"] = 3
                 print(f"📊 优化：根据建议启用多轮交织检索")
+
+        if "expand_keywords" in plan_data:
+            plan_data["expand_keywords"] = list(dict.fromkeys(plan_data["expand_keywords"]))
         
         return improved_plan
     
-    def generate_optimization_report(self, before: Dict, after: Dict, evaluation: Dict) -> str:
+    def generate_optimization_report(self, before: Dict, after: Dict, analysis: Dict = None) -> str:
         """生成优化前后对比报告"""
+        analysis = analysis or {}
         report = f"""
 ## 优化效果报告
 
@@ -214,6 +363,12 @@ class OptimizationEngine:
 
 ### 改进幅度
 """
+        priority_issue = analysis.get("priority_issue")
+        applied_actions = analysis.get("recommended_actions", [])
+        if priority_issue:
+            report += f"- 本次优化重点: {priority_issue}\n"
+        if applied_actions:
+            report += f"- 应用动作: {', '.join(applied_actions)}\n"
         # 计算改进幅度
         for key in before.keys():
             if key in after:
@@ -402,6 +557,7 @@ def evaluation_node(state: ControllerState) -> dict:
         return {
             "evaluation_result": evaluation_result,
             "optimization_suggestions": suggestions,
+            "optimization_analysis": analysis,
             "step": "evaluation_completed",
             "messages": [AIMessage(content="评估完成，已生成优化建议")]
         }
@@ -419,26 +575,36 @@ def optimization_node(state: ControllerState) -> dict:
     """节点5：根据评估结果决定是否重新执行"""
     evaluation_result = state.get("evaluation_result", {})
     retry_count = state.get("retry_count", 0)
-    max_retries = 2  # 最多重试2次
+    max_retries = state.get("max_retries", 2)
     
     data = evaluation_result.get("data", {})
     
-    # 计算平均分数
+    # 计算7维平均分，并针对关键维度设置更严格的兜底阈值
     scores = [
         data.get("retrieval_relevance", 0),
         data.get("answer_accuracy", 0),
         data.get("answer_completeness", 0),
-        data.get("reasoning_effectiveness", 0)
+        data.get("reasoning_effectiveness", 0),
+        data.get("tool_call_appropriateness", 0),
+        data.get("result_fusion_quality", 0),
+        data.get("answer_optimization_effect", 0)
     ]
     avg_score = sum(scores) / len(scores)
+    critical_dimensions = {
+        "answer_accuracy": data.get("answer_accuracy", 0),
+        "answer_completeness": data.get("answer_completeness", 0),
+        "retrieval_relevance": data.get("retrieval_relevance", 0),
+        "tool_call_appropriateness": data.get("tool_call_appropriateness", 0),
+    }
+    has_critical_issue = any(score < 3 for score in critical_dimensions.values())
     
-    # 决策逻辑：如果平均分低于3.5且还有重试次数，则优化重试
-    if avg_score < 3.5 and retry_count < max_retries:
+    # 决策逻辑：平均分偏低或关键维度过低，且还有重试次数，则进入优化重试
+    if (avg_score < 3.5 or has_critical_issue) and retry_count < max_retries:
         print(f"\n🔄 [步骤5] 评估分数较低 ({avg_score:.1f}/5)，启动优化重试 (第{retry_count + 1}次)")
         
         # 根据评估结果调整规划
         optimization_engine = OptimizationEngine()
-        analysis = optimization_engine.analyze_evaluation(evaluation_result)
+        analysis = state.get("optimization_analysis") or optimization_engine.analyze_evaluation(evaluation_result)
         
         # 生成改进的规划
         original_plan = state.get("planner_result", {})
@@ -448,6 +614,9 @@ def optimization_node(state: ControllerState) -> dict:
             "planner_result": improved_plan,
             "retry_count": retry_count + 1,
             "optimization_applied": True,
+            "baseline_evaluation": state.get("baseline_evaluation") or evaluation_result,
+            "optimization_analysis": analysis,
+            "optimization_actions_applied": analysis.get("recommended_actions", []),
             "step": "optimization_applied",
             "messages": [AIMessage(content=f"应用优化策略，准备重试 (第{retry_count + 1}次)")]
         }
@@ -472,8 +641,16 @@ def finalize_node(state: ControllerState) -> dict:
     optimization_report = None
     if state.get("retry_count", 0) > 0:
         optimization_engine = OptimizationEngine()
-        # 这里可以生成前后对比报告
-        optimization_report = "已根据评估建议进行优化重试"
+        before_eval = (state.get("baseline_evaluation") or {}).get("data", {})
+        after_eval = (state.get("evaluation_result") or {}).get("data", {})
+        if before_eval and after_eval:
+            optimization_report = optimization_engine.generate_optimization_report(
+                before_eval,
+                after_eval,
+                state.get("optimization_analysis") or {}
+            )
+        else:
+            optimization_report = "已根据评估建议进行优化重试"
     
     return {
         "step": "completed",
@@ -621,7 +798,7 @@ class OptimizedRAGController:
         self.app = create_controller_agent()
         self.optimization_engine = OptimizationEngine()
     
-    def run(self, query: str, max_retries: int = 2) -> Dict:
+    def run(self, query: str, max_retries: int = 2, collection_name: Optional[str] = None) -> Dict:
         """
         执行完整RAG流程，支持自动优化
         
@@ -638,7 +815,9 @@ class OptimizedRAGController:
             "messages": [HumanMessage(content=f"开始处理：{query}")],
             "query": query,
             "retry_count": 0,
+            "max_retries": max_retries,
             "optimization_suggestions": [],
+            "optimization_actions_applied": [],
             "step": "start"
         }
 
@@ -662,7 +841,7 @@ class OptimizedRAGController:
                 eval_data.get("answer_completeness", 0)
             ]) / 3 if eval_data else 0
 
-            return {
+            payload = {
                 "success": not result.get("error"),
                 "query": query,
                 "retry_count": result.get("retry_count", 0),
@@ -682,16 +861,31 @@ class OptimizedRAGController:
                 "step": result.get("step", "completed"),
                 "error": result.get("error")
             }
+            try:
+                logged_collection_name = collection_name
+                planner_payload = payload.get("planner", {})
+                if logged_collection_name is None and isinstance(planner_payload, dict):
+                    logged_collection_name = planner_payload.get("collection_name")
+                get_storage_db().log_query_result(payload, collection_name=logged_collection_name)
+            except Exception as db_error:
+                print(f"⚠️ SQLite日志写入失败：{db_error}")
+
+            return payload
             
         except Exception as e:
             error_msg = f"控制器工作流执行失败：{str(e)}"
             print(f"❌ {error_msg}")
             
-            return {
+            payload = {
                 "success": False,
                 "query": query,
                 "error": error_msg
             }
+            try:
+                get_storage_db().log_query_result(payload)
+            except Exception as db_error:
+                print(f"⚠️ SQLite日志写入失败：{db_error}")
+            return payload
 
 
 def print_optimized_result(result: Dict):
@@ -755,6 +949,451 @@ if __name__ == "__main__":
     controller = OptimizedRAGController()
     
     # 测试问题
-    test_queries = "北京种植香菇需要控制哪些温度和湿度条件？"
+    test_queries = "山东临沂种植白玉菇该怎么在育种阶段需要注意什么，有什么步骤？"
     result = controller.run(test_queries, max_retries=2)
     print_optimized_result(result)
+ 
+# ===== Runtime patches for stability =====
+NUMERIC_SCORE_KEYS = [
+    "retrieval_relevance",
+    "answer_accuracy",
+    "answer_completeness",
+    "reasoning_effectiveness",
+    "tool_call_appropriateness",
+    "result_fusion_quality",
+    "answer_optimization_effect",
+]
+
+DOMAIN_KEYWORDS = [
+    "食用菌", "香菇", "平菇", "金针菇", "白玉菇", "杏鲍菇", "菌丝", "菌种",
+    "出菇", "发菌", "菌房", "培养料", "培养基", "灭菌", "接种", "栽培", "种植",
+    "温度", "湿度", "通风", "污染", "菇", "菌",
+]
+
+
+def _is_out_of_scope_query(query: str, intent_data: Dict[str, Any]) -> bool:
+    text = query or ""
+    if any(keyword in text for keyword in DOMAIN_KEYWORDS):
+        return False
+    intent_type = intent_data.get("intent_type", "unknown")
+    keywords = intent_data.get("keywords") or []
+    domain = intent_data.get("domain", "")
+    return (intent_type == "unknown" or not keywords) and domain in {"其他食用菌", "通用", "", None}
+
+
+def _build_out_of_scope_result(reason: str) -> Dict[str, Any]:
+    answer = (
+        "该问题超出本系统当前的服务范围。"
+        "本系统主要面向食用菌种植知识问答，可回答菌种选择、培养料配制、环境控制、出菇管理和病害防治等相关问题。"
+        "请改为咨询食用菌种植相关内容。"
+    )
+    return {
+        "reasoning_result": {
+            "success": True,
+            "fused_results": [],
+            "raw_answer": answer,
+            "optimized_answer": answer,
+            "retrieve_rounds": 0,
+            "called_tools": [],
+            "tool_results": [],
+            "error": None,
+        },
+        "evaluation_result": {
+            "success": True,
+            "data": {
+                "retrieval_relevance": 0,
+                "answer_accuracy": 4,
+                "answer_completeness": 4,
+                "reasoning_effectiveness": 3,
+                "tool_call_appropriateness": 5,
+                "result_fusion_quality": 3,
+                "answer_optimization_effect": 3,
+                "suggestion": "该问题超出系统服务范围，已触发边界拒答策略。",
+            },
+            "error": None,
+        },
+        "optimization_suggestions": [],
+        "out_of_scope": True,
+        "boundary_reason": reason,
+    }
+
+
+def _build_degraded_reasoning_result(error_msg: str) -> Dict[str, Any]:
+    answer = (
+        "系统在当前问题的深度推理阶段出现超时或异常，已返回降级结果。"
+        "建议稍后重试，或将问题改写为更简洁、聚焦的食用菌种植问题。"
+    )
+    return {
+        "success": False,
+        "fused_results": [],
+        "raw_answer": answer,
+        "optimized_answer": answer,
+        "retrieve_rounds": 0,
+        "called_tools": [],
+        "tool_results": [],
+        "error": error_msg,
+    }
+
+
+def _build_degraded_evaluation_result(error_msg: str) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "data": {
+            "retrieval_relevance": 2,
+            "answer_accuracy": 2,
+            "answer_completeness": 2,
+            "reasoning_effectiveness": 2,
+            "tool_call_appropriateness": 2,
+            "result_fusion_quality": 2,
+            "answer_optimization_effect": 2,
+            "suggestion": f"评估阶段降级：{error_msg}",
+        },
+        "error": error_msg,
+    }
+
+
+def _patched_generate_optimization_report(self, before: Dict, after: Dict, analysis: Dict = None) -> str:
+    analysis = analysis or {}
+    report = "## 优化效果报告\n\n"
+    priority_issue = analysis.get("priority_issue")
+    applied_actions = analysis.get("recommended_actions", [])
+    if priority_issue:
+        report += f"- 本次优化重点: {priority_issue}\n"
+    if applied_actions:
+        report += f"- 应用动作: {', '.join(applied_actions)}\n"
+    for key in NUMERIC_SCORE_KEYS:
+        before_value = before.get(key, 0)
+        after_value = after.get(key, 0)
+        if not isinstance(before_value, (int, float)) or not isinstance(after_value, (int, float)):
+            continue
+        diff = after_value - before_value
+        arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+        report += f"- {key}: {before_value} -> {after_value} ({diff:+.0f}) {arrow}\n"
+    return report
+
+
+OptimizationEngine.generate_optimization_report = _patched_generate_optimization_report
+
+
+PATCHED_DOMAIN_KEYWORDS = [
+    "食用菌",
+    "香菇",
+    "平菇",
+    "金针菇",
+    "白玉菇",
+    "杏鲍菇",
+    "菌丝",
+    "菌种",
+    "出菇",
+    "发菌",
+    "菌房",
+    "培养料",
+    "培养基",
+    "灭菌",
+    "接种",
+    "栽培",
+    "种植",
+    "温度",
+    "湿度",
+    "通风",
+    "污染",
+]
+
+
+def _patched_is_out_of_scope_query(query: str, intent_data: Dict[str, Any]) -> bool:
+    text = query or ""
+    if any(keyword in text for keyword in PATCHED_DOMAIN_KEYWORDS):
+        return False
+
+    intent_type = (intent_data or {}).get("intent_type", "unknown")
+    keywords = (intent_data or {}).get("keywords") or []
+    domain = (intent_data or {}).get("domain", "")
+
+    return (intent_type == "unknown" or not keywords) and domain in {"其他食用菌", "通用", "", None}
+
+
+def intent_node(state: ControllerState) -> dict:
+    """Patched intent node with out-of-scope early stop."""
+    query = state["query"]
+
+    try:
+        print(f"\n[Step 1] Intent parsing: {query}")
+        intent_result = parse_intent(query)
+        intent_data = intent_result.get("data", {}) if intent_result.get("success") else {}
+
+        if _patched_is_out_of_scope_query(query, intent_data):
+            print("[Boundary] Out-of-scope query detected. Return boundary response directly.")
+            boundary_result = _build_out_of_scope_result("out_of_scope_query")
+            return {
+                "intent_result": intent_result,
+                **boundary_result,
+                "step": "intent_completed",
+                "messages": [AIMessage(content="Detected out-of-scope query and returned boundary response.")],
+            }
+
+        return {
+            "intent_result": intent_result,
+            "step": "intent_completed",
+            "messages": [AIMessage(content=f"Intent parsed: {intent_data.get('intent_type', 'unknown')}")],
+        }
+    except Exception as e:
+        error_msg = f"Intent parsing failed: {str(e)}"
+        print(f"[Error] {error_msg}")
+        return {
+            "error": error_msg,
+            "step": "intent_failed",
+            "messages": [AIMessage(content=error_msg)],
+        }
+
+
+def reasoning_node(state: ControllerState) -> dict:
+    """Patched reasoning node with degraded fallback instead of hard failure."""
+    query = state["query"]
+    planner_result = state["planner_result"]
+    retry_count = state.get("retry_count", 0)
+
+    print(f"\n[Step 3] Reasoning agent running... attempt={retry_count + 1}")
+
+    reasoning_agent = ReasoningGraphAgent()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(reasoning_agent.run, query, planner_result)
+
+    try:
+        reasoning_result = future.result(timeout=60)
+    except concurrent.futures.TimeoutError:
+        executor.shutdown(wait=False)
+        error_msg = f"Reasoning timeout on attempt {retry_count + 1}"
+        print(f"[Degraded] {error_msg}")
+        return {
+            "reasoning_result": _build_degraded_reasoning_result(error_msg),
+            "reasoning_degraded": True,
+            "step": "reasoning_completed",
+            "messages": [AIMessage(content=error_msg)],
+        }
+    except Exception as e:
+        executor.shutdown(wait=False)
+        error_msg = f"Reasoning execution error: {str(e)}"
+        print(f"[Degraded] {error_msg}")
+        return {
+            "reasoning_result": _build_degraded_reasoning_result(error_msg),
+            "reasoning_degraded": True,
+            "step": "reasoning_completed",
+            "messages": [AIMessage(content=error_msg)],
+        }
+    finally:
+        executor.shutdown(wait=False)
+
+    if reasoning_result.get("success"):
+        print(
+            f"[OK] Reasoning finished. rounds={reasoning_result.get('retrieve_rounds')}, "
+            f"tools={reasoning_result.get('called_tools')}"
+        )
+    else:
+        print("[Warn] Reasoning returned non-success payload, but workflow will continue.")
+
+    return {
+        "reasoning_result": reasoning_result,
+        "reasoning_degraded": not reasoning_result.get("success", False),
+        "step": "reasoning_completed",
+        "messages": [AIMessage(content="Reasoning completed")],
+    }
+
+
+def evaluation_node(state: ControllerState) -> dict:
+    """Patched evaluation node with degraded fallback instead of hard failure."""
+    query = state["query"]
+    reasoning_result = state["reasoning_result"]
+
+    print("\n[Step 4] Evaluation agent running...")
+
+    evaluation_agent = EvaluationGraphAgent()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(evaluation_agent.evaluate, query, reasoning_result)
+
+    try:
+        evaluation_result = future.result(timeout=30)
+    except concurrent.futures.TimeoutError:
+        executor.shutdown(wait=False)
+        error_msg = "Evaluation timeout"
+        print(f"[Degraded] {error_msg}")
+        return {
+            "evaluation_result": _build_degraded_evaluation_result(error_msg),
+            "optimization_suggestions": [],
+            "evaluation_degraded": True,
+            "step": "evaluation_completed",
+            "messages": [AIMessage(content=error_msg)],
+        }
+    except Exception as e:
+        executor.shutdown(wait=False)
+        error_msg = f"Evaluation execution error: {str(e)}"
+        print(f"[Degraded] {error_msg}")
+        return {
+            "evaluation_result": _build_degraded_evaluation_result(error_msg),
+            "optimization_suggestions": [],
+            "evaluation_degraded": True,
+            "step": "evaluation_completed",
+            "messages": [AIMessage(content=error_msg)],
+        }
+    finally:
+        executor.shutdown(wait=False)
+
+    if evaluation_result.get("success"):
+        data = evaluation_result.get("data", {})
+        optimization_engine = OptimizationEngine()
+        analysis = optimization_engine.analyze_evaluation(evaluation_result)
+        suggestions = [a["description"] for a in analysis.get("optimization_actions", [])]
+        print(
+            f"[OK] Evaluation finished. relevance={data.get('retrieval_relevance')}, "
+            f"accuracy={data.get('answer_accuracy')}, completeness={data.get('answer_completeness')}"
+        )
+        return {
+            "evaluation_result": evaluation_result,
+            "optimization_suggestions": suggestions,
+            "optimization_analysis": analysis,
+            "evaluation_degraded": False,
+            "step": "evaluation_completed",
+            "messages": [AIMessage(content="Evaluation completed")],
+        }
+
+    print("[Warn] Evaluation returned non-success payload, skip optimization retry.")
+    return {
+        "evaluation_result": evaluation_result,
+        "optimization_suggestions": [],
+        "evaluation_degraded": True,
+        "step": "evaluation_completed",
+        "messages": [AIMessage(content="Evaluation degraded")],
+    }
+
+
+def optimization_node(state: ControllerState) -> dict:
+    """Patched optimization node that skips retries for degraded or out-of-scope cases."""
+    if state.get("out_of_scope"):
+        print("\n[Step 5] Out-of-scope query, skip optimization.")
+        return {
+            "optimization_applied": False,
+            "step": "optimization_skipped",
+            "messages": [AIMessage(content="Skip optimization for out-of-scope query.")],
+        }
+
+    if state.get("evaluation_degraded"):
+        print("\n[Step 5] Evaluation degraded, skip optimization retry.")
+        return {
+            "optimization_applied": False,
+            "step": "optimization_skipped",
+            "messages": [AIMessage(content="Skip optimization because evaluation degraded.")],
+        }
+
+    evaluation_result = state.get("evaluation_result", {})
+    retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", 2)
+    data = evaluation_result.get("data", {})
+
+    scores = [data.get(key, 0) for key in NUMERIC_SCORE_KEYS]
+    avg_score = sum(scores) / len(scores) if scores else 0
+    critical_dimensions = {
+        "answer_accuracy": data.get("answer_accuracy", 0),
+        "answer_completeness": data.get("answer_completeness", 0),
+        "retrieval_relevance": data.get("retrieval_relevance", 0),
+        "tool_call_appropriateness": data.get("tool_call_appropriateness", 0),
+    }
+    has_critical_issue = any(score < 3 for score in critical_dimensions.values())
+
+    if (avg_score < 3.5 or has_critical_issue) and retry_count < max_retries:
+        print(f"\n[Step 5] Apply optimization retry. avg_score={avg_score:.2f}, retry={retry_count + 1}")
+        optimization_engine = OptimizationEngine()
+        analysis = state.get("optimization_analysis") or optimization_engine.analyze_evaluation(evaluation_result)
+        original_plan = state.get("planner_result", {})
+        improved_plan = optimization_engine.generate_improved_plan(original_plan, analysis)
+        return {
+            "planner_result": improved_plan,
+            "retry_count": retry_count + 1,
+            "optimization_applied": True,
+            "baseline_evaluation": state.get("baseline_evaluation") or evaluation_result,
+            "optimization_analysis": analysis,
+            "optimization_actions_applied": analysis.get("recommended_actions", []),
+            "step": "optimization_applied",
+            "messages": [AIMessage(content="Optimization retry applied.")],
+        }
+
+    print(f"\n[Step 5] Skip optimization. avg_score={avg_score:.2f}, retry_count={retry_count}")
+    return {
+        "optimization_applied": False,
+        "step": "optimization_skipped",
+        "messages": [AIMessage(content="Optimization skipped.")],
+    }
+
+
+def after_intent(state: ControllerState) -> str:
+    if state.get("error"):
+        return "error_handler"
+    if state.get("out_of_scope"):
+        return "finalize"
+    return "planner"
+
+
+def create_controller_agent():
+    workflow = StateGraph(ControllerState)
+
+    workflow.add_node("intent", intent_node)
+    workflow.add_node("planner", planner_node)
+    workflow.add_node("reasoning", reasoning_node)
+    workflow.add_node("evaluation", evaluation_node)
+    workflow.add_node("optimization", optimization_node)
+    workflow.add_node("finalize", finalize_node)
+    workflow.add_node("error_handler", error_handler_node)
+
+    workflow.add_edge(START, "intent")
+
+    workflow.add_conditional_edges(
+        "intent",
+        after_intent,
+        {
+            "planner": "planner",
+            "finalize": "finalize",
+            "error_handler": "error_handler",
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "planner",
+        after_planner,
+        {
+            "reasoning": "reasoning",
+            "error_handler": "error_handler",
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "reasoning",
+        after_reasoning,
+        {
+            "evaluation": "evaluation",
+            "error_handler": "error_handler",
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "evaluation",
+        after_evaluation,
+        {
+            "optimization": "optimization",
+            "error_handler": "error_handler",
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "optimization",
+        after_optimization,
+        {
+            "reasoning": "reasoning",
+            "finalize": "finalize",
+            "error_handler": "error_handler",
+        },
+    )
+
+    workflow.add_edge("finalize", END)
+    workflow.add_edge("error_handler", END)
+
+    memory = InMemorySaver()
+    app = workflow.compile(checkpointer=memory)
+    return app
