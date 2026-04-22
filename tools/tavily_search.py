@@ -7,9 +7,26 @@
 @Version :   1.0
 @Desc    :   可供调用的搜索接口工具
 """
+import builtins
 import os
+import sys
 from tavily import TavilyClient
 from dotenv import load_dotenv
+
+
+def safe_print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        sanitized_args = []
+        for arg in args:
+            text = str(arg)
+            sanitized_args.append(text.encode(encoding, errors="ignore").decode(encoding, errors="ignore"))
+        builtins.print(*sanitized_args, **kwargs)
+
+
+print = safe_print
 
 def load_env_from_root():
     """向上遍历目录，找到项目根目录的.env文件并加载"""

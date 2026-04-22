@@ -33,11 +33,14 @@ load_env_from_root()
 
 class IntentResult(BaseModel):
     intent_type: str = Field(description="rag_search/web_search/weather/unknown")
-    domain: str = Field(description="食用菌子领域：香菇/金针菇/杏鲍菇/其他食用菌")
+    domain: str = Field(description="食用菌领域：香菇/金针菇/杏鲍菇/其他食用菌/non_domain")
     keywords: List[str] = Field(description="核心关键词列表")
     complexity: str = Field(description="问题复杂度：simple/complex/multi_turn")
     sub_tasks: List[str] = Field(description="拆解后的子任务列表")
     city: Optional[str] = Field(default=None, description="关联城市（天气相关）")
+    domain_scope: str = Field(default="in_domain", description="in_domain/out_of_scope/mixed")
+    allowed_tools: List[str] = Field(default_factory=list, description="边界控制下允许调用的工具")
+    answer_scope_hint: str = Field(default="", description="回答范围提示")
 
 
 class Skill:
@@ -113,10 +116,19 @@ class IntentParser:
             "金针菇": ["金针菇", "毛柄金钱菌"],
             "杏鲍菇": ["杏鲍菇", "刺芹侧耳"],
         }
+        self.generic_domain_keywords = [
+            "食用菌", "蘑菇", "菌菇", "菌种", "出菇", "发菌", "菌房", "灭菌",
+            "接种", "栽培", "种植", "污染", "菌棒", "培养基", "培养料",
+        ]
         self.complexity_keywords = {
             "complex": ["哪些", "多少", "如何控制", "怎么调节", "条件"],
             "multi_turn": ["为什么", "怎么办", "如何解决", "多次", "步骤"],
         }
+        self.mixed_query_markers = ["顺便", "另外", "同时", "再", "还", "并且", "以及"]
+        self.out_of_scope_service_keywords = [
+            "推荐", "餐厅", "饭店", "火锅", "电影", "手机", "简历", "股市",
+            "NBA", "Python", "量子力学", "写一首诗", "诗",
+        ]
 
     def extract_city(self, query: str) -> Optional[str]:
         city_pattern = r"北京|上海|广州|深圳|杭州|成都|重庆|南京|武汉|西安|郑州|济南|青岛"
@@ -133,7 +145,9 @@ class IntentParser:
         for domain, keys in self.domain_keywords.items():
             if any(key in query for key in keys):
                 return domain
-        return "其他食用菌"
+        if any(key in query for key in self.generic_domain_keywords):
+            return "其他食用菌"
+        return "non_domain"
 
     def _extract_keywords_by_rule(self, query: str) -> List[str]:
         city = self.extract_city(query)
@@ -142,10 +156,40 @@ class IntentParser:
 
         keyword_pattern = r"香菇|金针菇|杏鲍菇|温度|湿度|种植|周期|通风|培养基|天气|气候"
         keywords = re.findall(keyword_pattern, query)
+        if not keywords and self._extract_domain_by_rule(query) == "non_domain":
+            return []
         if len(keywords) < 2:
             fallback = re.split(r"的|需要|控制|哪些|和", query)
             keywords = [k.strip() for k in fallback if k.strip()][:2]
         return keywords[:5]
+
+    def _derive_domain_scope(self, query: str, intent_type: str, domain: str) -> str:
+        if domain != "non_domain":
+            return "in_domain"
+
+        has_weather_signal = any(key in query for key in self.intent_keywords["weather"])
+        has_mixed_marker = any(marker in query for marker in self.mixed_query_markers)
+        has_out_of_scope_task = any(keyword.lower() in query.lower() for keyword in self.out_of_scope_service_keywords)
+
+        if has_weather_signal and has_mixed_marker and has_out_of_scope_task:
+            return "mixed"
+        return "out_of_scope"
+
+    def _build_scope_metadata(self, domain_scope: str) -> Dict[str, Any]:
+        if domain_scope == "mixed":
+            return {
+                "allowed_tools": ["weather"],
+                "answer_scope_hint": "仅回答天气相关部分，不回答餐饮、购物、娱乐等越界请求。",
+            }
+        if domain_scope == "out_of_scope":
+            return {
+                "allowed_tools": [],
+                "answer_scope_hint": "该问题超出食用菌知识问答系统的服务范围，应明确说明边界，不扩展回答域外内容。",
+            }
+        return {
+            "allowed_tools": [],
+            "answer_scope_hint": "",
+        }
 
     def _extract_complexity_by_rule(self, query: str) -> str:
         if any(key in query for key in self.complexity_keywords["multi_turn"]):
@@ -172,6 +216,8 @@ class IntentParser:
         complexity = self._extract_complexity_by_rule(query)
         sub_tasks = self._split_sub_tasks(query, complexity)
         city = self.extract_city(query)
+        domain_scope = self._derive_domain_scope(query, intent_type, domain)
+        scope_metadata = self._build_scope_metadata(domain_scope)
 
         return {
             "intent_type": intent_type,
@@ -180,6 +226,9 @@ class IntentParser:
             "complexity": complexity,
             "sub_tasks": sub_tasks,
             "city": city,
+            "domain_scope": domain_scope,
+            "allowed_tools": scope_metadata["allowed_tools"],
+            "answer_scope_hint": scope_metadata["answer_scope_hint"],
         }
 
     def llm_parse(self, query: str) -> Dict[str, Any]:
@@ -189,11 +238,14 @@ class IntentParser:
 
 必须包含以下字段：
 - intent_type: rag_search/web_search/weather/unknown
-- domain: 香菇/金针菇/杏鲍菇/其他食用菌
+- domain: 香菇/金针菇/杏鲍菇/其他食用菌/non_domain
 - keywords: 核心关键词列表（最多5个）
 - complexity: simple/complex/multi_turn
 - sub_tasks: 拆解后的子任务列表（如果没有子任务则返回空列表）
 - city: 关联城市（如果没有则返回null）
+- domain_scope: in_domain/out_of_scope/mixed
+- allowed_tools: 允许使用的工具列表
+- answer_scope_hint: 回答范围提示
 
 请确保返回合法的JSON格式。"""
         try:
@@ -208,9 +260,21 @@ class IntentParser:
             json_str = re.sub(r",\s*}", "}", json_str)
             llm_result = json.loads(json_str)
 
-            for field in ["intent_type", "domain", "keywords", "complexity", "sub_tasks", "city"]:
+            for field in [
+                "intent_type", "domain", "keywords", "complexity",
+                "sub_tasks", "city", "domain_scope", "allowed_tools", "answer_scope_hint",
+            ]:
                 if field not in llm_result:
-                    llm_result[field] = None if field == "city" else ([] if field in ["keywords", "sub_tasks"] else "unknown")
+                    if field == "city":
+                        llm_result[field] = None
+                    elif field in ["keywords", "sub_tasks", "allowed_tools"]:
+                        llm_result[field] = []
+                    elif field == "answer_scope_hint":
+                        llm_result[field] = ""
+                    elif field == "domain_scope":
+                        llm_result[field] = "in_domain"
+                    else:
+                        llm_result[field] = "unknown"
 
             return {"llm_based_result": llm_result, "error": None}
         except Exception as exc:
@@ -228,6 +292,22 @@ class IntentParser:
         if "city" not in final_intent or final_intent["city"] is None:
             final_intent["city"] = rule_result.get("city") or self.extract_city("")
 
+        if final_intent.get("domain") not in {"香菇", "金针菇", "杏鲍菇", "其他食用菌", "non_domain"}:
+            final_intent["domain"] = rule_result.get("domain", "non_domain")
+
+        domain_scope = final_intent.get("domain_scope")
+        if domain_scope not in {"in_domain", "out_of_scope", "mixed"}:
+            domain_scope = rule_result.get("domain_scope", "in_domain")
+        if domain_scope == "in_domain" and final_intent.get("domain") == "non_domain":
+            domain_scope = rule_result.get("domain_scope", "out_of_scope")
+        final_intent["domain_scope"] = domain_scope
+
+        scope_metadata = self._build_scope_metadata(domain_scope)
+        if not isinstance(final_intent.get("allowed_tools"), list):
+            final_intent["allowed_tools"] = scope_metadata["allowed_tools"]
+        if not isinstance(final_intent.get("answer_scope_hint"), str) or not final_intent.get("answer_scope_hint"):
+            final_intent["answer_scope_hint"] = scope_metadata["answer_scope_hint"]
+
         return {"final_intent": final_intent, "merge_error": llm_error}
 
     def validate(self, query: str, final_intent: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,24 +315,36 @@ class IntentParser:
             validated_result = IntentResult(**final_intent)
             return {"final_intent": validated_result.model_dump(), "error": None}
         except Exception as exc:
+            domain = self._extract_domain_by_rule(query)
+            domain_scope = self._derive_domain_scope(query, "unknown", domain)
+            scope_metadata = self._build_scope_metadata(domain_scope)
             fallback = IntentResult(
-                intent_type="rag_search",
-                domain=self._extract_domain_by_rule(query),
+                intent_type="unknown",
+                domain=domain,
                 keywords=self._extract_keywords_by_rule(query),
                 complexity="simple",
                 sub_tasks=[],
                 city=self.extract_city(query),
+                domain_scope=domain_scope,
+                allowed_tools=scope_metadata["allowed_tools"],
+                answer_scope_hint=scope_metadata["answer_scope_hint"],
             )
             return {"final_intent": fallback.model_dump(), "error": f"验证失败，使用兜底结果：{str(exc)}"}
 
     def fallback(self, query: str, reason: str) -> Dict[str, Any]:
+        domain = self._extract_domain_by_rule(query)
+        domain_scope = self._derive_domain_scope(query, "unknown", domain)
+        scope_metadata = self._build_scope_metadata(domain_scope)
         fallback_intent = IntentResult(
-            intent_type="rag_search",
-            domain=self._extract_domain_by_rule(query),
-            keywords=self._extract_keywords_by_rule(query) or ["查询"],
+            intent_type="unknown",
+            domain=domain,
+            keywords=self._extract_keywords_by_rule(query),
             complexity="simple",
             sub_tasks=[],
             city=self.extract_city(query),
+            domain_scope=domain_scope,
+            allowed_tools=scope_metadata["allowed_tools"],
+            answer_scope_hint=scope_metadata["answer_scope_hint"],
         )
         return {"final_intent": fallback_intent.model_dump(), "error": reason}
 

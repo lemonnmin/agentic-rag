@@ -301,17 +301,26 @@ else:
         st.markdown('<p class="step-header">📊 第四步：系统评估</p>', unsafe_allow_html=True)
         evaluation = result.get("evaluation", {})
         if evaluation:
-            # 分数卡片布局
-            score_items = [
-                ("检索相关性", evaluation.get('retrieval_relevance', 0)),
-                ("答案准确性", evaluation.get('answer_accuracy', 0)),
-                ("答案完整性", evaluation.get('answer_completeness', 0)),
-                ("推理有效性", evaluation.get('reasoning_effectiveness', 0)),
-                ("工具调用合理性", evaluation.get('tool_call_appropriateness', 0)),
-                ("结果融合质量", evaluation.get('result_fusion_quality', 0)),
-                ("答案优化效果", evaluation.get('answer_optimization_effect', 0))
-            ]
-            # 分成两行显示
+            evaluation_mode = evaluation.get("evaluation_mode", "standard")
+            if evaluation_mode == "boundary":
+                score_items = [
+                    ("Boundary Recognition", evaluation.get("boundary_recognition", 0)),
+                    ("Scope Compliance", evaluation.get("scope_compliance", 0)),
+                    ("Response Clarity", evaluation.get("response_clarity", 0)),
+                    ("Helpful Redirection", evaluation.get("helpful_redirection", 0)),
+                    ("Tool Appropriateness", evaluation.get("tool_call_appropriateness", 0)),
+                ]
+                st.caption(evaluation.get("final_score_basis", "Average the five boundary dimensions"))
+            else:
+                score_items = [
+                    ("检索相关性", evaluation.get('retrieval_relevance', 0)),
+                    ("答案准确性", evaluation.get('answer_accuracy', 0)),
+                    ("答案完整性", evaluation.get('answer_completeness', 0)),
+                    ("推理有效性", evaluation.get('reasoning_effectiveness', 0)),
+                    ("工具调用合理性", evaluation.get('tool_call_appropriateness', 0)),
+                    ("结果融合质量", evaluation.get('result_fusion_quality', 0)),
+                    ("答案优化效果", evaluation.get('answer_optimization_effect', 0))
+                ]
             row1 = score_items[:4]
             row2 = score_items[4:]
             

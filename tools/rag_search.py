@@ -8,7 +8,9 @@
 @Desc    :   rag_search 专门调用Chroma，Embedding，RAG 检索
 """
 import sys
+import builtins
 import os
+import sys
 import logging
 from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -138,3 +140,16 @@ if __name__ == "__main__":
     # multi_tool = RagSearchTool(mode="multi_turn")
     # print(multi_tool.run("杏鲍菇的生长周期是多久？"))
     # print(multi_tool.run("如何缩短这个周期？"))
+def safe_print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        sanitized_args = []
+        for arg in args:
+            text = str(arg)
+            sanitized_args.append(text.encode(encoding, errors="ignore").decode(encoding, errors="ignore"))
+        builtins.print(*sanitized_args, **kwargs)
+
+
+print = safe_print

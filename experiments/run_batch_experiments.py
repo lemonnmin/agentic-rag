@@ -124,13 +124,24 @@ def create_openai_client() -> OpenAI:
 def compute_final_score(evaluation_data: Dict[str, Any]) -> float:
     if not evaluation_data:
         return 0.0
-    score = sum(
-        [
-            evaluation_data.get("retrieval_relevance", 0),
-            evaluation_data.get("answer_accuracy", 0),
-            evaluation_data.get("answer_completeness", 0),
+
+    evaluation_mode = evaluation_data.get("evaluation_mode", "standard")
+    if evaluation_mode == "boundary":
+        score_keys = [
+            "boundary_recognition",
+            "scope_compliance",
+            "response_clarity",
+            "helpful_redirection",
+            "tool_call_appropriateness",
         ]
-    ) / 3
+    else:
+        score_keys = [
+            "retrieval_relevance",
+            "answer_accuracy",
+            "answer_completeness",
+        ]
+
+    score = sum(float(evaluation_data.get(key, 0) or 0) for key in score_keys) / len(score_keys)
     return round(score, 2)
 
 
@@ -284,16 +295,28 @@ def run_fixed_rag(question: str) -> Dict[str, Any]:
     }
 
 
-def run_agentic(question: str, controller, max_retries: int, collection_name: str) -> Dict[str, Any]:
+def run_agentic(
+    question: str,
+    controller,
+    max_retries: int,
+    collection_name: str,
+    evaluation_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     return controller.run(
         question,
         max_retries=max_retries,
         collection_name=collection_name,
+        evaluation_context=evaluation_context,
     )
 
 
-def evaluate_result(question: str, reasoning_result: Dict[str, Any], evaluator) -> Dict[str, Any]:
-    evaluation = evaluator.evaluate(question, reasoning_result)
+def evaluate_result(
+    question: str,
+    reasoning_result: Dict[str, Any],
+    evaluator,
+    evaluation_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    evaluation = evaluator.evaluate(question, reasoning_result, evaluation_context or {})
     return evaluation.get("data", {}) if evaluation else {}
 
 
@@ -341,6 +364,7 @@ def build_record(
         "retrieve_rounds": retrieve_rounds,
         "retry_count": retry_count,
         "final_score": round(float(final_score), 2) if final_score is not None else 0.0,
+        "evaluation_mode": evaluation_data.get("evaluation_mode", "standard"),
         "retrieval_relevance": evaluation_data.get("retrieval_relevance", 0),
         "answer_accuracy": evaluation_data.get("answer_accuracy", 0),
         "answer_completeness": evaluation_data.get("answer_completeness", 0),
@@ -348,6 +372,10 @@ def build_record(
         "tool_call_appropriateness": evaluation_data.get("tool_call_appropriateness", 0),
         "result_fusion_quality": evaluation_data.get("result_fusion_quality", 0),
         "answer_optimization_effect": evaluation_data.get("answer_optimization_effect", 0),
+        "boundary_recognition": evaluation_data.get("boundary_recognition", 0),
+        "scope_compliance": evaluation_data.get("scope_compliance", 0),
+        "response_clarity": evaluation_data.get("response_clarity", 0),
+        "helpful_redirection": evaluation_data.get("helpful_redirection", 0),
         "response_time_s": round(response_time_s, 3),
         "success": success,
         "notes": notes,
@@ -437,23 +465,23 @@ def run_single_method(
 
     if method == "LLM_ONLY":
         base_result = run_llm_only(question, args.llm_model)
-        evaluation_data = evaluate_result(question, base_result, evaluator)
+        evaluation_data = evaluate_result(question, base_result, evaluator, question_item)
         result = deepcopy(base_result)
         result["evaluation"] = evaluation_data
     elif method == "BASIC_RAG":
         base_result = run_basic_rag(question)
-        evaluation_data = evaluate_result(question, base_result, evaluator)
+        evaluation_data = evaluate_result(question, base_result, evaluator, question_item)
         result = deepcopy(base_result)
         result["evaluation"] = evaluation_data
     elif method == "RAG_RERANK":
         base_result = run_fixed_rag(question)
-        evaluation_data = evaluate_result(question, base_result, evaluator)
+        evaluation_data = evaluate_result(question, base_result, evaluator, question_item)
         result = deepcopy(base_result)
         result["evaluation"] = evaluation_data
     elif method == "AGENTIC_RAG":
         if controller is None:
             raise ValueError("AGENTIC_RAG 模式缺少 controller")
-        result = run_agentic(question, controller, args.max_retries, args.collection_name)
+        result = run_agentic(question, controller, args.max_retries, args.collection_name, question_item)
     else:
         raise ValueError(f"未知方法：{method}")
 

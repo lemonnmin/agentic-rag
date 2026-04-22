@@ -8,6 +8,8 @@
 @Desc    :   检索规划代理：使用LangGraph工作流实现（修复版）
 """
 
+import builtins
+import sys
 from typing import TypedDict, Annotated, Dict, List, Optional
 from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
@@ -19,6 +21,21 @@ import os
 import json
 import re
 from dotenv import load_dotenv
+
+
+def safe_print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        sanitized_args = []
+        for arg in args:
+            text = str(arg)
+            sanitized_args.append(text.encode(encoding, errors="ignore").decode(encoding, errors="ignore"))
+        builtins.print(*sanitized_args, **kwargs)
+
+
+print = safe_print
 
 # 加载环境变量
 def load_env_from_root():
@@ -168,6 +185,9 @@ def rule_based_planning_node(state: PlannerState) -> dict:
     # 去重
     rule_plan["expand_keywords"] = list(dict.fromkeys(expand_keywords))
     rule_plan["sub_tasks"] = intent_core.get("sub_tasks", [])
+    rule_plan["domain_scope"] = intent_core.get("domain_scope", "in_domain")
+    rule_plan["allowed_tools"] = intent_core.get("allowed_tools", [])
+    rule_plan["answer_scope_hint"] = intent_core.get("answer_scope_hint", "")
     
     return {
         "rule_based_plan": rule_plan,
@@ -271,6 +291,12 @@ def merge_plans_node(state: PlannerState) -> dict:
     # 确保子任务存在
     if "sub_tasks" not in final_plan or not final_plan["sub_tasks"]:
         final_plan["sub_tasks"] = state.get("intent_data", {}).get("sub_tasks", [])
+    if "domain_scope" not in final_plan:
+        final_plan["domain_scope"] = state.get("intent_data", {}).get("domain_scope", "in_domain")
+    if "allowed_tools" not in final_plan:
+        final_plan["allowed_tools"] = state.get("intent_data", {}).get("allowed_tools", [])
+    if "answer_scope_hint" not in final_plan:
+        final_plan["answer_scope_hint"] = state.get("intent_data", {}).get("answer_scope_hint", "")
     
     return {
         "final_plan": final_plan,
@@ -285,18 +311,26 @@ def validate_plan_node(state: PlannerState) -> dict:
     try:
         # 尝试创建RetrievalPlan对象进行验证
         validated_plan = RetrievalPlan(**final_plan)
+        validated_plan_dict = validated_plan.dict()
+        validated_plan_dict["domain_scope"] = final_plan.get("domain_scope", "in_domain")
+        validated_plan_dict["allowed_tools"] = final_plan.get("allowed_tools", [])
+        validated_plan_dict["answer_scope_hint"] = final_plan.get("answer_scope_hint", "")
         
         return {
-            "final_plan": validated_plan.dict(),
+            "final_plan": validated_plan_dict,
             "step": "plan_validated",
             "messages": [AIMessage(content="✅ 检索策略验证通过")]
         }
     except Exception as e:
         # 如果验证失败，创建默认的兜底策略
         fallback_plan = RetrievalPlan()
+        fallback_plan_dict = fallback_plan.dict()
+        fallback_plan_dict["domain_scope"] = final_plan.get("domain_scope", "in_domain")
+        fallback_plan_dict["allowed_tools"] = final_plan.get("allowed_tools", [])
+        fallback_plan_dict["answer_scope_hint"] = final_plan.get("answer_scope_hint", "")
         
         return {
-            "final_plan": fallback_plan.dict(),
+            "final_plan": fallback_plan_dict,
             "error": f"验证失败，使用兜底策略：{str(e)}",
             "step": "plan_validated_with_fallback",
             "messages": [AIMessage(content="⚠️ 使用兜底检索策略")]

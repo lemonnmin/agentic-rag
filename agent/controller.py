@@ -8,6 +8,7 @@
 @Desc    :   增强版控制器：根据评估结果自动优化系统
 """
 
+import builtins
 import sys
 import os
 import json
@@ -29,6 +30,21 @@ from agent.reasoning import ReasoningGraphAgent
 from agent.evaluation import EvaluationGraphAgent
 from rag.LLM import OpenAIChat
 from rag.storage_db import get_storage_db
+
+
+def safe_print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        sanitized_args = []
+        for arg in args:
+            text = str(arg)
+            sanitized_args.append(text.encode(encoding, errors="ignore").decode(encoding, errors="ignore"))
+        builtins.print(*sanitized_args, **kwargs)
+
+
+print = safe_print
 
 
 def load_env_from_root():
@@ -54,6 +70,7 @@ class ControllerState(TypedDict):
     planner_result: Optional[Dict]           # 检索规划结果
     reasoning_result: Optional[Dict]         # 推理代理结果
     evaluation_result: Optional[Dict]        # 评估结果
+    evaluation_context: Optional[Dict]       # 评测上下文
     optimization_suggestions: List[str]      # 优化建议列表
     optimization_applied: bool                # 是否已应用优化
     retry_count: int                          # 重试次数
@@ -64,6 +81,11 @@ class ControllerState(TypedDict):
     baseline_evaluation: Optional[Dict]       # 首次评估结果
     optimization_analysis: Optional[Dict]     # 结构化优化分析
     optimization_actions_applied: List[str]   # 已应用的优化动作
+    out_of_scope: bool                        # 是否越界
+    boundary_reason: Optional[str]            # 越界原因
+    reasoning_degraded: bool                  # 推理是否降级
+    evaluation_degraded: bool                 # 评估是否降级
+    optimization_report: Optional[str]        # 优化报告
 
 
 # ========== 优化规则引擎 ==========
@@ -115,13 +137,19 @@ def _build_out_of_scope_result(reason: str) -> Dict[str, Any]:
         "evaluation_result": {
             "success": True,
             "data": {
+                "evaluation_mode": "boundary",
                 "retrieval_relevance": 0,
                 "answer_accuracy": 4,
                 "answer_completeness": 4,
                 "reasoning_effectiveness": 3,
+                "boundary_recognition": 5,
+                "scope_compliance": 5,
+                "response_clarity": 4,
+                "helpful_redirection": 4,
                 "tool_call_appropriateness": 5,
                 "result_fusion_quality": 3,
                 "answer_optimization_effect": 3,
+                "final_score_basis": "Average the five boundary dimensions",
                 "suggestion": "该问题超出系统服务范围，已触发边界拒答策略。",
             },
             "error": None,
@@ -153,6 +181,7 @@ def _build_degraded_evaluation_result(error_msg: str) -> Dict[str, Any]:
     return {
         "success": False,
         "data": {
+            "evaluation_mode": "standard",
             "retrieval_relevance": 2,
             "answer_accuracy": 2,
             "answer_completeness": 2,
@@ -164,6 +193,31 @@ def _build_degraded_evaluation_result(error_msg: str) -> Dict[str, Any]:
         },
         "error": error_msg,
     }
+
+
+def _compute_final_score(evaluation_data: Dict[str, Any]) -> float:
+    if not evaluation_data:
+        return 0.0
+
+    evaluation_mode = evaluation_data.get("evaluation_mode", "standard")
+    if evaluation_mode == "boundary":
+        boundary_keys = [
+            "boundary_recognition",
+            "scope_compliance",
+            "response_clarity",
+            "helpful_redirection",
+            "tool_call_appropriateness",
+        ]
+        scores = [float(evaluation_data.get(key, 0) or 0) for key in boundary_keys]
+        return round(sum(scores) / len(scores), 2) if scores else 0.0
+
+    standard_keys = [
+        "retrieval_relevance",
+        "answer_accuracy",
+        "answer_completeness",
+    ]
+    scores = [float(evaluation_data.get(key, 0) or 0) for key in standard_keys]
+    return round(sum(scores) / len(scores), 2) if scores else 0.0
 
 
 class OptimizationEngine:
@@ -410,6 +464,13 @@ def intent_node(state: ControllerState) -> dict:
 
 def planner_node(state: ControllerState) -> dict:
     """节点2：执行检索规划（支持优化）"""
+    if state.get("out_of_scope"):
+        print("\n[Step 2] Out-of-scope query, skip planner.")
+        return {
+            "step": "planner_skipped",
+            "messages": [AIMessage(content="Skip planner for out-of-scope query.")],
+        }
+
     intent_result = state["intent_result"]
     optimization_suggestions = state.get("optimization_suggestions", [])
     
@@ -518,7 +579,12 @@ def evaluation_node(state: ControllerState) -> dict:
     evaluation_agent = EvaluationGraphAgent()
     
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(evaluation_agent.evaluate, query, reasoning_result)
+    future = executor.submit(
+        evaluation_agent.evaluate,
+        query,
+        reasoning_result,
+        state.get("evaluation_context") or {},
+    )
     
     try:
         # 设置超时 30 秒
@@ -798,7 +864,13 @@ class OptimizedRAGController:
         self.app = create_controller_agent()
         self.optimization_engine = OptimizationEngine()
     
-    def run(self, query: str, max_retries: int = 2, collection_name: Optional[str] = None) -> Dict:
+    def run(
+        self,
+        query: str,
+        max_retries: int = 2,
+        collection_name: Optional[str] = None,
+        evaluation_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict:
         """
         执行完整RAG流程，支持自动优化
         
@@ -814,6 +886,7 @@ class OptimizedRAGController:
         inputs = {
             "messages": [HumanMessage(content=f"开始处理：{query}")],
             "query": query,
+            "evaluation_context": evaluation_context or {},
             "retry_count": 0,
             "max_retries": max_retries,
             "optimization_suggestions": [],
@@ -835,17 +908,13 @@ class OptimizedRAGController:
             
             # 计算最终分数
             eval_data = evaluation_result.get("data", {}) if evaluation_result else {}
-            final_score = sum([
-                eval_data.get("retrieval_relevance", 0),
-                eval_data.get("answer_accuracy", 0),
-                eval_data.get("answer_completeness", 0)
-            ]) / 3 if eval_data else 0
+            final_score = _compute_final_score(eval_data)
 
             payload = {
                 "success": not result.get("error"),
                 "query": query,
                 "retry_count": result.get("retry_count", 0),
-                "final_score": round(final_score, 1),
+                "final_score": round(final_score, 2),
                 "intent": intent_result.get("data", {}) if intent_result.get("success") else intent_result,
                 "planner": planner_result.get("data", {}) if planner_result.get("success") else planner_result,
                 "reasoning": {
@@ -858,6 +927,13 @@ class OptimizedRAGController:
                 "evaluation": eval_data,
                 "optimization_suggestions": result.get("optimization_suggestions", []),
                 "optimization_report": result.get("optimization_report"),
+                "out_of_scope": result.get("out_of_scope", False),
+                "boundary_reason": result.get("boundary_reason"),
+                "domain_scope": (
+                    intent_result.get("data", {}).get("domain_scope")
+                    if isinstance(intent_result, dict) and intent_result.get("success")
+                    else None
+                ),
                 "step": result.get("step", "completed"),
                 "error": result.get("error")
             }
@@ -1001,13 +1077,19 @@ def _build_out_of_scope_result(reason: str) -> Dict[str, Any]:
         "evaluation_result": {
             "success": True,
             "data": {
+                "evaluation_mode": "boundary",
                 "retrieval_relevance": 0,
                 "answer_accuracy": 4,
                 "answer_completeness": 4,
                 "reasoning_effectiveness": 3,
+                "boundary_recognition": 5,
+                "scope_compliance": 5,
+                "response_clarity": 4,
+                "helpful_redirection": 4,
                 "tool_call_appropriateness": 5,
                 "result_fusion_quality": 3,
                 "answer_optimization_effect": 3,
+                "final_score_basis": "Average the five boundary dimensions",
                 "suggestion": "该问题超出系统服务范围，已触发边界拒答策略。",
             },
             "error": None,
@@ -1101,6 +1183,12 @@ PATCHED_DOMAIN_KEYWORDS = [
 
 
 def _patched_is_out_of_scope_query(query: str, intent_data: Dict[str, Any]) -> bool:
+    domain_scope = (intent_data or {}).get("domain_scope")
+    if domain_scope in {"in_domain", "mixed"}:
+        return False
+    if domain_scope == "out_of_scope":
+        return True
+
     text = query or ""
     if any(keyword in text for keyword in PATCHED_DOMAIN_KEYWORDS):
         return False
@@ -1148,6 +1236,15 @@ def intent_node(state: ControllerState) -> dict:
 
 def reasoning_node(state: ControllerState) -> dict:
     """Patched reasoning node with degraded fallback instead of hard failure."""
+    if state.get("out_of_scope"):
+        print("\n[Step 3] Out-of-scope query, skip reasoning.")
+        return {
+            "reasoning_result": state.get("reasoning_result", {}),
+            "reasoning_degraded": False,
+            "step": "reasoning_skipped",
+            "messages": [AIMessage(content="Skip reasoning for out-of-scope query.")],
+        }
+
     query = state["query"]
     planner_result = state["planner_result"]
     retry_count = state.get("retry_count", 0)
@@ -1203,12 +1300,23 @@ def evaluation_node(state: ControllerState) -> dict:
     """Patched evaluation node with degraded fallback instead of hard failure."""
     query = state["query"]
     reasoning_result = state["reasoning_result"]
+    raw_context = state.get("evaluation_context") or {}
+    evaluation_context = dict(raw_context) if isinstance(raw_context, dict) else {}
+    intent_payload = state.get("intent_result", {}) or {}
+    intent_data = intent_payload.get("data", {}) if isinstance(intent_payload, dict) else {}
+    if intent_data:
+        evaluation_context.setdefault("domain_scope", intent_data.get("domain_scope"))
+        evaluation_context.setdefault("answer_scope_hint", intent_data.get("answer_scope_hint"))
+        evaluation_context.setdefault("allowed_tools", intent_data.get("allowed_tools", []))
+    if state.get("out_of_scope"):
+        evaluation_context.setdefault("domain_scope", "out_of_scope")
+        evaluation_context.setdefault("boundary_reason", state.get("boundary_reason"))
 
     print("\n[Step 4] Evaluation agent running...")
 
     evaluation_agent = EvaluationGraphAgent()
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(evaluation_agent.evaluate, query, reasoning_result)
+    future = executor.submit(evaluation_agent.evaluate, query, reasoning_result, evaluation_context)
 
     try:
         evaluation_result = future.result(timeout=30)
@@ -1283,23 +1391,84 @@ def optimization_node(state: ControllerState) -> dict:
             "messages": [AIMessage(content="Skip optimization because evaluation degraded.")],
         }
 
+    intent_payload = state.get("intent_result", {}) or {}
+    intent_data = intent_payload.get("data", {}) if isinstance(intent_payload, dict) else {}
+    if intent_data.get("domain_scope") == "mixed":
+        print("\n[Step 5] Mixed-scope query, skip optimization retry.")
+        return {
+            "optimization_applied": False,
+            "step": "optimization_skipped",
+            "messages": [AIMessage(content="Skip optimization for mixed-scope query.")],
+        }
+
     evaluation_result = state.get("evaluation_result", {})
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 2)
     data = evaluation_result.get("data", {})
+    evaluation_context = state.get("evaluation_context") or {}
+    if not isinstance(evaluation_context, dict):
+        evaluation_context = {}
+    reasoning_payload = state.get("reasoning_result", {}) or {}
+    called_tools = reasoning_payload.get("called_tools", []) if isinstance(reasoning_payload, dict) else []
+    if not isinstance(called_tools, list):
+        called_tools = []
+
+    if data.get("evaluation_mode") == "boundary":
+        print("\n[Step 5] Boundary-mode evaluation, skip optimization retry.")
+        return {
+            "optimization_applied": False,
+            "step": "optimization_skipped",
+            "messages": [AIMessage(content="Skip optimization for boundary-mode evaluation.")],
+        }
 
     scores = [data.get(key, 0) for key in NUMERIC_SCORE_KEYS]
     avg_score = sum(scores) / len(scores) if scores else 0
-    critical_dimensions = {
-        "answer_accuracy": data.get("answer_accuracy", 0),
-        "answer_completeness": data.get("answer_completeness", 0),
-        "retrieval_relevance": data.get("retrieval_relevance", 0),
-        "tool_call_appropriateness": data.get("tool_call_appropriateness", 0),
-    }
-    has_critical_issue = any(score < 3 for score in critical_dimensions.values())
+    answer_accuracy = data.get("answer_accuracy", 0)
+    answer_completeness = data.get("answer_completeness", 0)
+    retrieval_relevance = data.get("retrieval_relevance", 0)
+    tool_call_appropriateness = data.get("tool_call_appropriateness", 0)
 
-    if (avg_score < 3.5 or has_critical_issue) and retry_count < max_retries:
-        print(f"\n[Step 5] Apply optimization retry. avg_score={avg_score:.2f}, retry={retry_count + 1}")
+    expected_tool = str(evaluation_context.get("expected_tool") or "").strip()
+    category = str(evaluation_context.get("category") or "").strip()
+
+    core_answer_strong = answer_accuracy >= 4 and answer_completeness >= 4
+    retrieval_strong = retrieval_relevance >= 4
+    severe_answer_issue = answer_accuracy < 4 or answer_completeness < 4
+    severe_retrieval_issue = retrieval_relevance < 3
+
+    tool_mismatch = False
+    if expected_tool:
+        expected_tools = {item.strip() for item in expected_tool.split("|") if item.strip()}
+        tool_mismatch = not expected_tools.intersection(set(called_tools))
+
+    tool_retry_worthy = bool(expected_tool) and tool_mismatch and tool_call_appropriateness < 3
+    high_quality_answer = core_answer_strong and retrieval_strong
+    effective_max_retries = min(max_retries, 1)
+
+    if high_quality_answer and not tool_retry_worthy:
+        print(
+            "\n[Step 5] Skip optimization. "
+            f"High-quality answer detected (avg_score={avg_score:.2f}, expected_tool={expected_tool or 'NONE'}, category={category or 'UNKNOWN'})."
+        )
+        return {
+            "optimization_applied": False,
+            "step": "optimization_skipped",
+            "messages": [AIMessage(content="Skip optimization because answer quality is already high.")],
+        }
+
+    should_retry = retry_count < effective_max_retries and (
+        severe_answer_issue
+        or severe_retrieval_issue
+        or tool_retry_worthy
+        or avg_score < 3.4
+    )
+
+    if should_retry:
+        print(
+            f"\n[Step 5] Apply optimization retry. avg_score={avg_score:.2f}, retry={retry_count + 1}, "
+            f"tool_retry_worthy={tool_retry_worthy}, severe_answer_issue={severe_answer_issue}, "
+            f"severe_retrieval_issue={severe_retrieval_issue}"
+        )
         optimization_engine = OptimizationEngine()
         analysis = state.get("optimization_analysis") or optimization_engine.analyze_evaluation(evaluation_result)
         original_plan = state.get("planner_result", {})
@@ -1315,7 +1484,11 @@ def optimization_node(state: ControllerState) -> dict:
             "messages": [AIMessage(content="Optimization retry applied.")],
         }
 
-    print(f"\n[Step 5] Skip optimization. avg_score={avg_score:.2f}, retry_count={retry_count}")
+    print(
+        f"\n[Step 5] Skip optimization. avg_score={avg_score:.2f}, retry_count={retry_count}, "
+        f"tool_retry_worthy={tool_retry_worthy}, severe_answer_issue={severe_answer_issue}, "
+        f"severe_retrieval_issue={severe_retrieval_issue}"
+    )
     return {
         "optimization_applied": False,
         "step": "optimization_skipped",
@@ -1327,7 +1500,7 @@ def after_intent(state: ControllerState) -> str:
     if state.get("error"):
         return "error_handler"
     if state.get("out_of_scope"):
-        return "finalize"
+        return "evaluation"
     return "planner"
 
 
@@ -1349,7 +1522,7 @@ def create_controller_agent():
         after_intent,
         {
             "planner": "planner",
-            "finalize": "finalize",
+            "evaluation": "evaluation",
             "error_handler": "error_handler",
         },
     )
